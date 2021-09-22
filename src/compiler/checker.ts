@@ -9607,7 +9607,12 @@ namespace ts {
                         else if (node.kind === SyntaxKind.ConditionalType) {
                             return concatenate(outerTypeParameters, getInferTypeParameters(node as ConditionalTypeNode));
                         }
-                        const outerAndOwnTypeParameters = appendTypeParameters(outerTypeParameters, getEffectiveTypeParameterDeclarations(node as DeclarationWithTypeParameters));
+                        let outerAndOwnTypeParameters = appendTypeParameters(outerTypeParameters, getEffectiveTypeParameterDeclarations(node as DeclarationWithTypeParameters));
+                        if(node.kind === SyntaxKind.FunctionExpression || node.kind === SyntaxKind.ArrowFunction) {
+                            for(const typeParameter of (getTypeOfSymbol(getSymbolOfNode(node as SignatureDeclaration)) as ObjectType).callSignatures?.[0]?.typeParameters || []) {
+                                outerAndOwnTypeParameters = appendIfUnique(outerAndOwnTypeParameters, typeParameter);
+                            }
+                        }
                         const thisType = includeThisTypes &&
                             (node.kind === SyntaxKind.ClassDeclaration || node.kind === SyntaxKind.ClassExpression || node.kind === SyntaxKind.InterfaceDeclaration || isJSConstructor(node)) &&
                             getDeclaredTypeOfClassOrInterface(getSymbolOfNode(node as ClassLikeDeclaration | InterfaceDeclaration)).thisType;
