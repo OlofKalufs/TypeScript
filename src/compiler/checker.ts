@@ -933,7 +933,6 @@ namespace ts {
         let deferredGlobalTemplateStringsArrayType: ObjectType | undefined;
         let deferredGlobalImportMetaType: ObjectType;
         let deferredGlobalImportMetaExpressionType: ObjectType;
-        let deferredGlobalImportCallOptionsType: ObjectType | undefined;
         let deferredGlobalExtractSymbol: Symbol | undefined;
         let deferredGlobalOmitSymbol: Symbol | undefined;
         let deferredGlobalAwaitedSymbol: Symbol | undefined;
@@ -6569,7 +6568,7 @@ namespace ts {
 
                 function inlineExportModifiers(statements: Statement[]) {
                     // Pass 3: Move all `export {}`'s to `export` modifiers where possible
-                    const index = findIndex(statements, d => isExportDeclaration(d) && !d.moduleSpecifier && !d.assertClause && !!d.exportClause && isNamedExports(d.exportClause));
+                    const index = findIndex(statements, d => isExportDeclaration(d) && !d.moduleSpecifier && !!d.exportClause && isNamedExports(d.exportClause));
                     if (index >= 0) {
                         const exportDecl = statements[index] as ExportDeclaration & { readonly exportClause: NamedExports };
                         const replacements = mapDefined(exportDecl.exportClause.elements, e => {
@@ -6601,8 +6600,7 @@ namespace ts {
                                     exportDecl.exportClause,
                                     replacements
                                 ),
-                                exportDecl.moduleSpecifier,
-                                exportDecl.assertClause
+                                exportDecl.moduleSpecifier
                             );
                         }
                     }
@@ -7262,8 +7260,7 @@ namespace ts {
                                         propertyName && isIdentifier(propertyName) ? factory.createIdentifier(idText(propertyName)) : undefined,
                                         factory.createIdentifier(localName)
                                     )])),
-                                    factory.createStringLiteral(specifier),
-                                    /*importClause*/ undefined
+                                    factory.createStringLiteral(specifier)
                                 ), ModifierFlags.None);
                                 break;
                             }
@@ -7339,8 +7336,7 @@ namespace ts {
                                 // We use `target.parent || target` below as `target.parent` is unset when the target is a module which has been export assigned
                                 // And then made into a default by the `esModuleInterop` or `allowSyntheticDefaultImports` flag
                                 // In such cases, the `target` refers to the module itself already
-                                factory.createStringLiteral(getSpecifierForModuleSymbol(target.parent || target, context)),
-                                 /*assertClause*/ undefined
+                                factory.createStringLiteral(getSpecifierForModuleSymbol(target.parent || target, context))
                             ), ModifierFlags.None);
                             break;
                         case SyntaxKind.NamespaceImport:
@@ -7348,8 +7344,7 @@ namespace ts {
                                 /*decorators*/ undefined,
                                 /*modifiers*/ undefined,
                                 factory.createImportClause(/*isTypeOnly*/ false, /*importClause*/ undefined, factory.createNamespaceImport(factory.createIdentifier(localName))),
-                                factory.createStringLiteral(getSpecifierForModuleSymbol(target, context)),
-                                 /*assertClause*/ undefined
+                                factory.createStringLiteral(getSpecifierForModuleSymbol(target, context))
                             ), ModifierFlags.None);
                             break;
                         case SyntaxKind.NamespaceExport:
@@ -7374,8 +7369,7 @@ namespace ts {
                                             factory.createIdentifier(localName)
                                         )
                                     ])),
-                                factory.createStringLiteral(getSpecifierForModuleSymbol(target.parent || target, context)),
-                                 /*assertClause*/ undefined
+                                factory.createStringLiteral(getSpecifierForModuleSymbol(target.parent || target, context))
                             ), ModifierFlags.None);
                             break;
                         case SyntaxKind.ExportSpecifier:
@@ -9607,7 +9601,12 @@ namespace ts {
                         else if (node.kind === SyntaxKind.ConditionalType) {
                             return concatenate(outerTypeParameters, getInferTypeParameters(node as ConditionalTypeNode));
                         }
-                        const outerAndOwnTypeParameters = appendTypeParameters(outerTypeParameters, getEffectiveTypeParameterDeclarations(node as DeclarationWithTypeParameters));
+                        let outerAndOwnTypeParameters = appendTypeParameters(outerTypeParameters, getEffectiveTypeParameterDeclarations(node as DeclarationWithTypeParameters));
+                        if(node.kind === SyntaxKind.FunctionExpression || node.kind === SyntaxKind.ArrowFunction) {
+                            for(const typeParameter of (getTypeOfSymbol(getSymbolOfNode(node as SignatureDeclaration)) as ObjectType).callSignatures?.[0]?.typeParameters || []) {
+                                outerAndOwnTypeParameters = appendIfUnique(outerAndOwnTypeParameters, typeParameter);
+                            }
+                        }
                         const thisType = includeThisTypes &&
                             (node.kind === SyntaxKind.ClassDeclaration || node.kind === SyntaxKind.ClassExpression || node.kind === SyntaxKind.InterfaceDeclaration || isJSConstructor(node)) &&
                             getDeclaredTypeOfClassOrInterface(getSymbolOfNode(node as ClassLikeDeclaration | InterfaceDeclaration)).thisType;
@@ -13459,10 +13458,6 @@ namespace ts {
                 deferredGlobalImportMetaExpressionType = createAnonymousType(symbol, members, emptyArray, emptyArray, emptyArray);
             }
             return deferredGlobalImportMetaExpressionType;
-        }
-
-        function getGlobalImportCallOptionsType(reportErrors: boolean) {
-            return (deferredGlobalImportCallOptionsType ||= getGlobalType("ImportCallOptions" as __String, /*arity*/ 0, reportErrors)) || emptyObjectType;
         }
 
         function getGlobalESSymbolConstructorSymbol(reportErrors: boolean): Symbol | undefined {
@@ -17841,13 +17836,6 @@ namespace ts {
                         message = Diagnostics.Type_0_is_not_assignable_to_type_1_with_exactOptionalPropertyTypes_Colon_true_Consider_adding_undefined_to_the_types_of_the_target_s_properties;
                     }
                     else {
-                        if (source.flags & TypeFlags.StringLiteral && target.flags & TypeFlags.Union) {
-                            const suggestedType = getSuggestedTypeForNonexistentStringLiteralType(source as StringLiteralType, target as UnionType);
-                            if (suggestedType) {
-                                reportError(Diagnostics.Type_0_is_not_assignable_to_type_1_Did_you_mean_2, generalizedSourceType, targetType, typeToString(suggestedType));
-                                return;
-                            }
-                        }
                         message = Diagnostics.Type_0_is_not_assignable_to_type_1;
                     }
                 }
@@ -23250,10 +23238,9 @@ namespace ts {
 
         function isConstantReference(node: Node): boolean {
             switch (node.kind) {
-                case SyntaxKind.Identifier: {
+                case SyntaxKind.Identifier:
                     const symbol = getResolvedSymbol(node as Identifier);
-                    return isConstVariable(symbol) || isParameterOrCatchClauseVariable(symbol) && !isSymbolAssigned(symbol);
-                }
+                    return isConstVariable(symbol) || !!symbol.valueDeclaration && getRootDeclaration(symbol.valueDeclaration).kind === SyntaxKind.Parameter && !isParameterAssigned(symbol);
                 case SyntaxKind.PropertyAccessExpression:
                 case SyntaxKind.ElementAccessExpression:
                     // The resolvedSymbol property is initialized by checkPropertyAccess or checkElementAccess before we get here.
@@ -24387,38 +24374,37 @@ namespace ts {
                 node.kind === SyntaxKind.PropertyDeclaration)!;
         }
 
-        // Check if a parameter or catch variable is assigned anywhere
-        function isSymbolAssigned(symbol: Symbol) {
+        // Check if a parameter is assigned anywhere within its declaring function.
+        function isParameterAssigned(symbol: Symbol) {
             if (!symbol.valueDeclaration) {
                 return false;
             }
-            const parent = getRootDeclaration(symbol.valueDeclaration).parent;
-            const links = getNodeLinks(parent);
+            const func = getRootDeclaration(symbol.valueDeclaration).parent as FunctionLikeDeclaration;
+            const links = getNodeLinks(func);
             if (!(links.flags & NodeCheckFlags.AssignmentsMarked)) {
                 links.flags |= NodeCheckFlags.AssignmentsMarked;
-                if (!hasParentWithAssignmentsMarked(parent)) {
-                    markNodeAssignments(parent);
+                if (!hasParentWithAssignmentsMarked(func)) {
+                    markParameterAssignments(func);
                 }
             }
             return symbol.isAssigned || false;
         }
 
         function hasParentWithAssignmentsMarked(node: Node) {
-            return !!findAncestor(node.parent, node =>
-                (isFunctionLike(node) || isCatchClause(node)) && !!(getNodeLinks(node).flags & NodeCheckFlags.AssignmentsMarked));
+            return !!findAncestor(node.parent, node => isFunctionLike(node) && !!(getNodeLinks(node).flags & NodeCheckFlags.AssignmentsMarked));
         }
 
-        function markNodeAssignments(node: Node) {
+        function markParameterAssignments(node: Node) {
             if (node.kind === SyntaxKind.Identifier) {
                 if (isAssignmentTarget(node)) {
                     const symbol = getResolvedSymbol(node as Identifier);
-                    if (isParameterOrCatchClauseVariable(symbol)) {
+                    if (symbol.valueDeclaration && getRootDeclaration(symbol.valueDeclaration).kind === SyntaxKind.Parameter) {
                         symbol.isAssigned = true;
                     }
                 }
             }
             else {
-                forEachChild(node, markNodeAssignments);
+                forEachChild(node, markParameterAssignments);
             }
         }
 
@@ -24487,19 +24473,7 @@ namespace ts {
         }
 
         function isExportOrExportExpression(location: Node) {
-            return !!findAncestor(location, n => {
-                const parent = n.parent;
-                if (parent === undefined) {
-                    return "quit";
-                }
-                if (isExportAssignment(parent)) {
-                    return parent.expression === n && isEntityNameExpression(n);
-                }
-                if (isExportSpecifier(parent)) {
-                    return parent.name === n || parent.propertyName === n;
-                }
-                return false;
-            });
+            return !!findAncestor(location, e => e.parent && isExportAssignment(e.parent) && e.parent.expression === e && isEntityNameExpression(e));
         }
 
         function markAliasReferenced(symbol: Symbol, location: Node) {
@@ -24668,7 +24642,7 @@ namespace ts {
             // analysis to include the immediately enclosing function.
             while (flowContainer !== declarationContainer && (flowContainer.kind === SyntaxKind.FunctionExpression ||
                 flowContainer.kind === SyntaxKind.ArrowFunction || isObjectLiteralOrClassExpressionMethodOrAccessor(flowContainer)) &&
-                (isConstVariable(localOrExportSymbol) && type !== autoArrayType || isParameter && !isSymbolAssigned(localOrExportSymbol))) {
+                (isConstVariable(localOrExportSymbol) && type !== autoArrayType || isParameter && !isParameterAssigned(localOrExportSymbol))) {
                 flowContainer = getControlFlowContainer(flowContainer);
             }
             // We only look for uninitialized variables in strict null checking mode, and only when we can analyze
@@ -25557,12 +25531,6 @@ namespace ts {
         }
 
         function getContextualTypeForArgumentAtIndex(callTarget: CallLikeExpression, argIndex: number): Type {
-            if (isImportCall(callTarget)) {
-                return argIndex === 0 ? stringType :
-                    argIndex === 1 ? getGlobalImportCallOptionsType(/*reportErrors*/ false) :
-                    anyType;
-            }
-
             // If we're already in the process of resolving the given signature, don't resolve again as
             // that could cause infinite recursion. Instead, return anySignature.
             const signature = getNodeLinks(callTarget).resolvedSignature === resolvingSignature ? resolvingSignature : getResolvedSignature(callTarget);
@@ -26023,6 +25991,10 @@ namespace ts {
                 case SyntaxKind.AwaitExpression:
                     return getContextualTypeForAwaitOperand(parent as AwaitExpression, contextFlags);
                 case SyntaxKind.CallExpression:
+                    if ((parent as CallExpression).expression.kind === SyntaxKind.ImportKeyword) {
+                        return stringType;
+                    }
+                    /* falls through */
                 case SyntaxKind.NewExpression:
                     return getContextualTypeForArgument(parent as CallExpression | NewExpression, node);
                 case SyntaxKind.TypeAssertionExpression:
@@ -28261,11 +28233,6 @@ namespace ts {
             }
 
             return suggestion;
-        }
-
-        function getSuggestedTypeForNonexistentStringLiteralType(source: StringLiteralType, target: UnionType): StringLiteralType | undefined {
-            const candidates = target.types.filter((type): type is StringLiteralType => !!(type.flags & TypeFlags.StringLiteral));
-            return getSpellingSuggestion(source.value, candidates, type => type.value);
         }
 
         /**
@@ -30618,24 +30585,15 @@ namespace ts {
             if (node.arguments.length === 0) {
                 return createPromiseReturnType(node, anyType);
             }
-
             const specifier = node.arguments[0];
             const specifierType = checkExpressionCached(specifier);
-            const optionsType = node.arguments.length > 1 ? checkExpressionCached(node.arguments[1]) : undefined;
             // Even though multiple arguments is grammatically incorrect, type-check extra arguments for completion
-            for (let i = 2; i < node.arguments.length; ++i) {
+            for (let i = 1; i < node.arguments.length; ++i) {
                 checkExpressionCached(node.arguments[i]);
             }
 
             if (specifierType.flags & TypeFlags.Undefined || specifierType.flags & TypeFlags.Null || !isTypeAssignableTo(specifierType, stringType)) {
                 error(specifier, Diagnostics.Dynamic_import_s_specifier_must_be_of_type_string_but_here_has_type_0, typeToString(specifierType));
-            }
-
-            if (optionsType) {
-                const importCallOptionsType = getGlobalImportCallOptionsType(/*reportErrors*/ true);
-                if (importCallOptionsType !== emptyObjectType) {
-                    checkTypeAssignableTo(optionsType, getNullableType(importCallOptionsType, TypeFlags.Undefined), node.arguments[1]);
-                }
             }
 
             // resolveExternalModuleName will return undefined if the moduleReferenceExpression is not a string literal
@@ -30741,11 +30699,13 @@ namespace ts {
                 case SyntaxKind.PropertyAccessExpression:
                 case SyntaxKind.ElementAccessExpression:
                     const expr = (node as PropertyAccessExpression | ElementAccessExpression).expression;
-                    let symbol = getTypeOfNode(expr).symbol;
-                    if (symbol && symbol.flags & SymbolFlags.Alias) {
-                        symbol = resolveAlias(symbol);
+                    if (isIdentifier(expr)) {
+                        let symbol = getSymbolAtLocation(expr);
+                        if (symbol && symbol.flags & SymbolFlags.Alias) {
+                            symbol = resolveAlias(symbol);
+                        }
+                        return !!(symbol && (symbol.flags & SymbolFlags.Enum) && getEnumKind(symbol) === EnumKind.Literal);
                     }
-                    return !!(symbol && (symbol.flags & SymbolFlags.Enum) && getEnumKind(symbol) === EnumKind.Literal);
             }
             return false;
         }
@@ -38073,7 +38033,6 @@ namespace ts {
             function checkClassMember(member: ClassElement | ParameterPropertyDeclaration, memberIsParameterProperty?: boolean) {
                 const hasOverride = hasOverrideModifier(member);
                 const hasStatic = isStatic(member);
-                const isJs = isInJSFile(member);
                 if (baseWithThis && (hasOverride || compilerOptions.noImplicitOverride)) {
                     const declaredProp = member.name && getSymbolAtLocation(member.name) || getSymbolAtLocation(member);
                     if (!declaredProp) {
@@ -38089,19 +38048,8 @@ namespace ts {
                     if (prop && !baseProp && hasOverride) {
                         const suggestion = getSuggestedSymbolForNonexistentClassMember(symbolName(declaredProp), baseType);
                         suggestion ?
-                            error(
-                                member,
-                                isJs ?
-                                    Diagnostics.This_member_cannot_have_a_JSDoc_comment_with_an_override_tag_because_it_is_not_declared_in_the_base_class_0_Did_you_mean_1 :
-                                    Diagnostics.This_member_cannot_have_an_override_modifier_because_it_is_not_declared_in_the_base_class_0_Did_you_mean_1,
-                                baseClassName,
-                                symbolToString(suggestion)) :
-                            error(
-                                member,
-                                isJs ?
-                                    Diagnostics.This_member_cannot_have_a_JSDoc_comment_with_an_override_tag_because_it_is_not_declared_in_the_base_class_0 :
-                                    Diagnostics.This_member_cannot_have_an_override_modifier_because_it_is_not_declared_in_the_base_class_0,
-                                baseClassName);
+                            error(member, Diagnostics.This_member_cannot_have_an_override_modifier_because_it_is_not_declared_in_the_base_class_0_Did_you_mean_1, baseClassName, symbolToString(suggestion)) :
+                            error(member, Diagnostics.This_member_cannot_have_an_override_modifier_because_it_is_not_declared_in_the_base_class_0, baseClassName);
                     }
                     else if (prop && baseProp?.declarations && compilerOptions.noImplicitOverride && !nodeInAmbientContext) {
                         const baseHasAbstract = some(baseProp.declarations, hasAbstractModifier);
@@ -38111,12 +38059,8 @@ namespace ts {
 
                         if (!baseHasAbstract) {
                             const diag = memberIsParameterProperty ?
-                                isJs ?
-                                    Diagnostics.This_parameter_property_must_have_a_JSDoc_comment_with_an_override_tag_because_it_overrides_a_member_in_the_base_class_0 :
-                                    Diagnostics.This_parameter_property_must_have_an_override_modifier_because_it_overrides_a_member_in_base_class_0 :
-                                isJs ?
-                                    Diagnostics.This_member_must_have_a_JSDoc_comment_with_an_override_tag_because_it_overrides_a_member_in_the_base_class_0 :
-                                    Diagnostics.This_member_must_have_an_override_modifier_because_it_overrides_a_member_in_the_base_class_0;
+                                Diagnostics.This_parameter_property_must_have_an_override_modifier_because_it_overrides_a_member_in_base_class_0 :
+                                Diagnostics.This_member_must_have_an_override_modifier_because_it_overrides_a_member_in_the_base_class_0;
                             error(member, diag, baseClassName);
                         }
                         else if (hasAbstractModifier(member) && baseHasAbstract) {
@@ -38126,12 +38070,7 @@ namespace ts {
                 }
                 else if (hasOverride) {
                     const className = typeToString(type);
-                    error(
-                        member,
-                        isJs ?
-                            Diagnostics.This_member_cannot_have_a_JSDoc_comment_with_an_override_tag_because_its_containing_class_0_does_not_extend_another_class :
-                            Diagnostics.This_member_cannot_have_an_override_modifier_because_its_containing_class_0_does_not_extend_another_class,
-                        className);
+                    error(member, Diagnostics.This_member_cannot_have_an_override_modifier_because_its_containing_class_0_does_not_extend_another_class, className);
                 }
             }
         }
@@ -39058,18 +38997,6 @@ namespace ts {
             }
         }
 
-        function checkAssertClause(declaration: ImportDeclaration | ExportDeclaration) {
-            if (declaration.assertClause) {
-                if (moduleKind !== ModuleKind.ESNext) {
-                    return grammarErrorOnNode(declaration.assertClause, Diagnostics.Import_assertions_are_only_supported_when_the_module_option_is_set_to_esnext);
-                }
-
-                if (isImportDeclaration(declaration) ? declaration.importClause?.isTypeOnly : declaration.isTypeOnly) {
-                    return grammarErrorOnNode(declaration.assertClause, Diagnostics.Import_assertions_cannot_be_used_with_type_only_imports_or_exports);
-                }
-            }
-        }
-
         function checkImportDeclaration(node: ImportDeclaration) {
             if (checkGrammarModuleElementContext(node, Diagnostics.An_import_declaration_can_only_be_used_in_a_namespace_or_module)) {
                 // If we hit an import declaration in an illegal context, just bail out to avoid cascading errors.
@@ -39101,7 +39028,7 @@ namespace ts {
                     }
                 }
             }
-            checkAssertClause(node);
+
         }
 
         function checkImportEqualsDeclaration(node: ImportEqualsDeclaration) {
@@ -39196,7 +39123,6 @@ namespace ts {
                     }
                 }
             }
-            checkAssertClause(node);
         }
 
         function checkGrammarExportDeclaration(node: ExportDeclaration): boolean {
@@ -43233,25 +43159,14 @@ namespace ts {
             }
 
             const nodeArguments = node.arguments;
-            if (moduleKind !== ModuleKind.ESNext) {
-                // We are allowed trailing comma after proposal-import-assertions.
-                checkGrammarForDisallowedTrailingComma(nodeArguments);
-
-                if (nodeArguments.length > 1) {
-                    const assertionArgument = nodeArguments[1];
-                    return grammarErrorOnNode(assertionArgument, Diagnostics.Dynamic_imports_only_support_a_second_argument_when_the_module_option_is_set_to_esnext);
-                }
+            if (nodeArguments.length !== 1) {
+                return grammarErrorOnNode(node, Diagnostics.Dynamic_import_must_have_one_specifier_as_an_argument);
             }
-
-            if (nodeArguments.length === 0 || nodeArguments.length > 2) {
-                return grammarErrorOnNode(node, Diagnostics.Dynamic_imports_can_only_accept_a_module_specifier_and_an_optional_assertion_as_arguments);
-            }
-
+            checkGrammarForDisallowedTrailingComma(nodeArguments);
             // see: parseArgumentOrArrayLiteralElement...we use this function which parse arguments of callExpression to parse specifier for dynamic import.
             // parseArgumentOrArrayLiteralElement allows spread element to be in an argument list which is not allowed as specifier in dynamic import.
-            const spreadElement = find(nodeArguments, isSpreadElement);
-            if (spreadElement) {
-                return grammarErrorOnNode(spreadElement, Diagnostics.Argument_of_dynamic_import_cannot_be_spread_element);
+            if (isSpreadElement(nodeArguments[0])) {
+                return grammarErrorOnNode(nodeArguments[0], Diagnostics.Specifier_of_dynamic_import_cannot_be_spread_element);
             }
             return false;
         }
